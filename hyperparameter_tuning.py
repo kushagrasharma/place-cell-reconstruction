@@ -269,21 +269,28 @@ def MSE(df, time_bucket_length):
     error /= len(test)
     return error
 
-def MSE_continuity_constraint(df, K, V, d, time_bucket_length):
-    msk = int(len(df) * .6666)
+def MSE_continuity_constraint(df, time_bucket_length, K=15, V=20, d=0.5, train_msk=None):
+    if not train_msk:
+        msk = int(len(df) * .6666)
     train = df.iloc[:msk]
     test = df.iloc[msk:]
     error = 0
     locations = list(set(df.location))
     average_speed = get_average_speeds(train, locations)
     poisson = caculate_poisson(train, locations, time_bucket_length)
+    neurons = list(df.columns[:-1])
+    predictions = []
     for index, row in test.iterrows():
-        x_last = df.location.iloc[np.where(df.index == index)[0] - 1].values[0]
-        x_pred = MLE_continuity_constraint(list(df.columns[:-1]), row[:-1], average_speed,
-                                           locations, x_last, K, V, d, time_bucket_length, poisson)
+        x_pred = 0
+        if len(predictions) == 0:
+            x_pred = MLE_p(neurons, row[:-1], locations, time_bucket_length, poisson)
+        else:
+            x_pred = MLE_continuity_constraint(neurons, row[:-1], average_speed,
+                                           locations, predictions[-1], K, V, d, time_bucket_length, poisson)
+        predictions.append(x_pred)
         error += (row.iloc[-1] - x_pred) ** 2
     error /= len(test)
-    return error
+    return error, predictions
 
 def find_best_time_bucket_length(spike_df, location_df, time_lengths, location_bucket_length=LOCATION_BUCKET_LENGTH):
     min_error = float('inf')
@@ -321,10 +328,12 @@ for directory in dirs:
             bucketed[time, length, directory] = a
         a = bucketed[time, length, directory]
         error = MSE(a, time)
-        for K, V in product(Ks, Vs):
-            error_continuity_constraint = MSE_continuity_constraint(a, K, V, 0.5, time)
-            print("error = {}, error_cc = {} for time {}s, length {}cm, K={}, V={}".format(error, error_continuity_constraint, time, length, K, V))
-            errors.append([time, length, K, V, error, error_continuity_constraint])
+        error_cc = MSE_continuity_constraint(a, time, 25, 25, 0.5)
+        errors.append([time, length, 25, 25, error, error_cc])
+        # for K, V in product(Ks, Vs):
+        #     error_continuity_constraint = MSE_continuity_constraint(a, time, K, V, 0.5)
+        #     print("error = {}, error_cc = {} for time {}s, length {}cm, K={}, V={}".format(error, error_continuity_constraint, time, length, K, V))
+        #     errors.append([time, length, K, V, error, error_continuity_constraint])
         #     min_time = find_best_time_bucket_length(concantenated_data[directory], data[directory]['location'], [0.01, 0.03, 0.1, 0.3, 1])
 error_df = pd.DataFrame(errors, columns=['time', 'length', 'K', 'V', 'error', 'error_cc'])
 error_df.to_csv("hyperparameter_errors.csv")

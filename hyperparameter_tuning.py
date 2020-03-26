@@ -288,9 +288,9 @@ def MSE_continuity_constraint(df, time_bucket_length, K=15, V=20, d=0.5, train_m
 global bucketed
 bucketed = {}
 # average time between spikes is 0.002s, time between location measurements is 0.02s
-times = [10]#, 5, 2, 1, 0.5, 0.3, 0.1, 0.03, 0.02, 0.01] 
+times = [10, 5, 2, 1, 0.5, 0.3, 0.1, 0.03, 0.02, 0.01] 
 # 25th percentile length difference is 0.1cm
-lengths = [50]#, 25, 10, 5, 2, 1, 0.5, 0.2, 0.25, 0.1, 0.05]
+lengths = [50, 25, 10, 5, 2, 1, 0.5, 0.2, 0.25, 0.1, 0.05]
 errors = []
 
 def calculate_MSE(time, length, directory):

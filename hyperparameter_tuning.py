@@ -304,15 +304,16 @@ def calculate_MSE(time, length, directory):
         bucketed[time, length, directory] = bucketed_spikes
 
     df = bucketed[time, length, directory]
-    error = MSE(a, time)
-    error_cc = MSE_continuity_constraint(a, time)
+    error, _ = MSE(df, time)
+    error_cc, _ = MSE_continuity_constraint(df, time)
+    print(time, length, error, error_cc)
     print("Time = {}s, length = {}cm, error = {:.2f}, error_cc = {:.2f}".format(time, length, error, error_cc))
     return [time, length, error, error_cc]
 
 if __name__ == "__main__":
     num_cores = multiprocessing.cpu_count()
-    errors = Parallel(n_jobs=num_cores)(delayed(calculate_MSE(time, length, directory)) 
-                                                        for time, length, directory in product(times, lengths, dirs))
+    processed_list = Parallel(n_jobs=num_cores)(delayed(calculate_MSE)(time, length, directory) 
+                                                    for time, length, directory in product(times, lengths, dirs))
 
     error_df = pd.DataFrame(errors, columns=['time', 'length', 'error', 'error_cc'])
     error_df.to_csv("hyperparameter_errors.csv")

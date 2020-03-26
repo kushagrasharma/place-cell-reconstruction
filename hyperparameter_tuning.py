@@ -285,11 +285,12 @@ def MSE_continuity_constraint(df, time_bucket_length, K=15, V=20, d=0.5, train_m
     error /= len(test)
     return error, predictions
 
+global bucketed
 bucketed = {}
 # average time between spikes is 0.002s, time between location measurements is 0.02s
-times = [10, 5, 2, 1, 0.5, 0.3, 0.1, 0.03, 0.02, 0.01] 
+times = [10]#, 5, 2, 1, 0.5, 0.3, 0.1, 0.03, 0.02, 0.01] 
 # 25th percentile length difference is 0.1cm
-lengths = [50, 25, 10, 5, 2, 1, 0.5, 0.2, 0.25, 0.1, 0.05]
+lengths = [50]#, 25, 10, 5, 2, 1, 0.5, 0.2, 0.25, 0.1, 0.05]
 errors = []
 
 def calculate_MSE(time, length, directory):
@@ -306,17 +307,14 @@ def calculate_MSE(time, length, directory):
     df = bucketed[time, length, directory]
     error, _ = MSE(df, time)
     error_cc, _ = MSE_continuity_constraint(df, time)
-    print(time, length, error, error_cc)
     print("Time = {}s, length = {}cm, error = {:.2f}, error_cc = {:.2f}".format(time, length, error, error_cc))
     return [time, length, error, error_cc]
 
-if __name__ == "__main__":
-    num_cores = multiprocessing.cpu_count()
-    processed_list = Parallel(n_jobs=num_cores)(delayed(calculate_MSE)(time, length, directory) 
-                                                    for time, length, directory in product(times, lengths, dirs))
+num_cores = multiprocessing.cpu_count()
+errors = Parallel(n_jobs=num_cores, require='sharedmem')(delayed(calculate_MSE)(time, length, directory) for time, length, directory in list(product(times, lengths, dirs)))
 
-    error_df = pd.DataFrame(errors, columns=['time', 'length', 'error', 'error_cc'])
-    error_df.to_csv("hyperparameter_errors.csv")
+error_df = pd.DataFrame(errors, columns=['time', 'length', 'error', 'error_cc'])
+error_df.to_csv("hyperparameter_errors.csv")
 
 
 

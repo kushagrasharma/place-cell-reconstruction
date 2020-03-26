@@ -6,6 +6,8 @@ import pandas as pd
 import numpy as np
 import math
 from itertools import cycle, product
+import multiprocessing
+from joblib import Parallel, delayed
 import matplotlib.pyplot as plt 
 plt.rcParams['figure.figsize'] = [20, 10]
 TESTING = True
@@ -148,46 +150,30 @@ def bucket_spikes(spike_train, bucket_size=TIME_BUCKET_LENGTH):
     return binned
 
 def x_round(x, round_num):
-    if x < 0:
+    if x < 0 or np.isnan(x):
         return x
     return round(x*round_num)/round_num
 
 def bucket_location(locations, bucket_size=TIME_BUCKET_LENGTH, location_bucket_length=LOCATION_BUCKET_LENGTH):
+    location_bucket_length = 1.0/location_bucket_length
     locations.loc[len(locations)-1] = ([float('nan')] * (len(locations.columns)-1))+ [pd.Timedelta(0, unit="sec")]
     locations = locations.sort_values('time').reset_index(drop=True)
     locations = locations.groupby(pd.Grouper(key='time', freq='{}S'.format(bucket_size)))
     locations = pd.DataFrame(locations.mean())
     locations = locations.fillna(method='ffill')
-    locations = locations.apply(lambda x: x.apply(lambda y: x_round(y, location_bucket_length)))
-    return locations
+    bucketed_locs = locations.apply(lambda x: x.apply(lambda y: x_round(y, location_bucket_length)))
+    return locations, bucketed_locs
 
 def poisson_mean(df, i, x, time_bucket_length):
     return df[df.location==x][i].sum()/(len(df[df.location==x]) * time_bucket_length)
 
-def caculate_poisson(df, locations, time_bucket_length):
+def calculate_poisson(df, locations, time_bucket_length):
     poisson = {}
     for x_k in locations:
         for i in list(df.columns[:-1]):
             pm = poisson_mean(df, i, x_k, time_bucket_length)
-            if pm:
-                poisson[i, x_k] = pm
+            poisson[i, x_k] = pm
     return poisson
-        
-
-def MLE_x(df, spikes, x, time_bucket_length):
-    # maximum likelihood estimate for x given spikes at a time
-    max_val = float('-inf')
-    max_x = -1
-    for x_k in x:
-        sum_val = 0
-        for i in list(df.columns[:-1]):
-            pm = poisson_mean(df, i, x_k, time_bucket_length)
-            if pm:
-                sum_val += (spikes[i] * math.log(pm*time_bucket_length)) - (pm*time_bucket_length)
-        if sum_val > max_val:
-            max_x = x_k
-            max_val = sum_val
-    return max_x
 
 def MLE_p(neurons, spikes, x, time_bucket_length, poisson):
     # poisson pre-calculated
@@ -198,11 +184,13 @@ def MLE_p(neurons, spikes, x, time_bucket_length, poisson):
         for i in neurons:
             if (i, x_k) in poisson:
                 pm = poisson[i, x_k]
-                sum_val += (spikes[i] * math.log(pm*time_bucket_length)) - (pm*time_bucket_length)
+                if pm:
+                    sum_val += (spikes[i] * math.log(pm*time_bucket_length)) - (pm*time_bucket_length)
         if sum_val > max_val:
             max_x = x_k
             max_val = sum_val
     return max_x
+
 
 def location_transition_prob(x_0, x_1, v, K, V, d):
     sigma = K * ((v/V) ** d)
@@ -247,93 +235,90 @@ def MLE_continuity_constraint(neurons, spikes, average_speed, x, x_last, K, V, d
         for i in neurons:
             if (i, x_k) in poisson:
                 pm = poisson[i, x_k]
-                sum_val += (spikes[i] * math.log(pm*time_bucket_length)) - (pm*time_bucket_length)
+                if pm:
+                    sum_val += (spikes[i] * math.log(pm*time_bucket_length)) - (pm*time_bucket_length)
         transition_prob = location_transition_prob(x_last, x_k, average_speed[x_k], K, V, d)
         sum_val += math.log(transition_prob)
         if sum_val > max_val:
             max_x = x_k
             max_val = sum_val
     return max_x
-    
 
 def MSE(df, time_bucket_length):
-    msk = np.random.rand(len(df)) < .6666
-    train = df[msk]
-    test = df[~msk]
+    msk = int(len(df) * .3333)
+    train = df.iloc[:msk]
+    test = df.iloc[msk:]
     error = 0
     locations = list(set(df.location))
-    poisson = caculate_poisson(train, locations, time_bucket_length)
-    for index, row in test.iterrows():
-        x_pred = MLE_p(list(df.columns[:-1]), row[:-1], locations, time_bucket_length, poisson)
-        error += (row.iloc[-1] - x_pred) ** 2
+    poisson = calculate_poisson(train, locations, time_bucket_length)
+    neurons = list(df.columns[:-2])
+    predictions = []
+    for index, row in df.iterrows():
+        x_pred = MLE_p(neurons, row[:-2], locations, time_bucket_length, poisson)
+        predictions.append((index, x_pred))
+        if len(predictions) > msk:
+            error += (row.iloc[-1] - x_pred) ** 2
     error /= len(test)
-    return error
+    return error, predictions
 
 def MSE_continuity_constraint(df, time_bucket_length, K=15, V=20, d=0.5, train_msk=None):
     if not train_msk:
-        msk = int(len(df) * .6666)
+        msk = int(len(df) * .3333)
     train = df.iloc[:msk]
     test = df.iloc[msk:]
     error = 0
     locations = list(set(df.location))
     average_speed = get_average_speeds(train, locations)
-    poisson = caculate_poisson(train, locations, time_bucket_length)
-    neurons = list(df.columns[:-1])
+    poisson = calculate_poisson(train, locations, time_bucket_length)
+    neurons = list(df.columns[:-2])
     predictions = []
-    for index, row in test.iterrows():
+    for index, row in df.iterrows():
         x_pred = 0
         if len(predictions) == 0:
-            x_pred = MLE_p(neurons, row[:-1], locations, time_bucket_length, poisson)
+            x_pred = MLE_p(neurons, row[:-2], locations, time_bucket_length, poisson)
         else:
-            x_pred = MLE_continuity_constraint(neurons, row[:-1], average_speed,
-                                           locations, predictions[-1], K, V, d, time_bucket_length, poisson)
-        predictions.append(x_pred)
-        error += (row.iloc[-1] - x_pred) ** 2
+            x_pred = MLE_continuity_constraint(neurons, row[:-2], average_speed,
+                                           locations, predictions[-1][1], K, V, d, time_bucket_length, poisson)
+        predictions.append((index, x_pred))
+        if len(predictions) > msk:
+            error += (row.iloc[-1] - x_pred) ** 2
     error /= len(test)
     return error, predictions
 
-def find_best_time_bucket_length(spike_df, location_df, time_lengths, location_bucket_length=LOCATION_BUCKET_LENGTH):
-    min_error = float('inf')
-    min_time = -1
-    for time in time_lengths:
-        df = bucket_spikes(spike_df, time)
-        a = bucket_location(location_df, time, location_bucket_length)
-        a[0] = a[0].apply(lambda x: np.nan if x == -1 or x == 0 else x)
-        df['location'] = a[0]
-        error = MSE(df, time)
-        if error < min_error:
-            min_error = error
-            min_time = time
-        print("error = {} for time length {}".format(error, time))
-    return min_time
-
 bucketed = {}
-min_time = -1
 # average time between spikes is 0.002s, time between location measurements is 0.02s
-times = [5, 2, 1, 0.5, 0.3, 0.1, 0.03, 0.02, 0.01] 
+times = [10, 5, 2, 1, 0.5, 0.3, 0.1, 0.03, 0.02, 0.01] 
 # 25th percentile length difference is 0.1cm
-lengths = [50, 25, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05]
-Ks = list(range(10, 30, 5))
-Vs = list(range(10, 30, 5))
-# ds = [1]
+lengths = [50, 25, 10, 5, 2, 1, 0.5, 0.2, 0.25, 0.1, 0.05]
 errors = []
-for directory in dirs:
-    for time, length in product(times, lengths):
-        if (time, length, directory) not in bucketed:
-            a = bucket_spikes(concantenated_data[directory], time)
-            b = bucket_location(data[directory]['location'], time, length)
-            b[0] = b[0].apply(lambda x: np.nan if x == -1 or x == 0 else x)
-            a['location'] = b[0]
-            a = a.dropna()
-            bucketed[time, length, directory] = a
-        a = bucketed[time, length, directory]
-        error = MSE(a, time)
-        error_cc = MSE_continuity_constraint(a, time, 25, 25, 0.5)
-        errors.append([time, length, 25, 25, error, error_cc])
-        # for K, V in product(Ks, Vs):
-        #     error_continuity_constraint = MSE_continuity_constraint(a, time, K, V, 0.5)
-        #     print("error = {}, error_cc = {} for time {}s, length {}cm, K={}, V={}".format(error, error_continuity_constraint, time, length, K, V))
-        #     errors.append([time, length, K, V, error, error_continuity_constraint])
-        #     min_time = find_best_time_bucket_length(concantenated_data[directory], data[directory]['location'], [0.01, 0.03, 0.1, 0.3, 1])
-error_df = pd.DataFrame(errors, columns=['time', 'length', 'K', 'V', 'error', 'error_cc'])
-error_df.to_csv("hyperparameter_errors.csv")
+
+def calculate_MSE(time, length, directory):
+    if (time, length, directory) not in bucketed:
+        bucketed_spikes = bucket_spikes(concantenated_data[directory], time)
+        locs, bucketed_locs = bucket_location(data[directory]['location'], time, length)
+        bucketed_locs[0] = bucketed_locs[0].apply(lambda x: np.nan if x == -1 or x == 0 else x)
+        locs[0] = locs[0].apply(lambda x: np.nan if x == -1 or x == 0 else x)
+        bucketed_spikes['location'] = bucketed_locs[0]
+        bucketed_spikes['unbucketed_location'] = locs[0]
+        bucketed_spikes = bucketed_spikes.dropna()
+        bucketed[time, length, directory] = bucketed_spikes
+
+    df = bucketed[time, length, directory]
+    error = MSE(a, time)
+    error_cc = MSE_continuity_constraint(a, time)
+    print("Time = {}s, length = {}cm, error = {:.2f}, error_cc = {:.2f}".format(time, length, error, error_cc))
+    return [time, length, error, error_cc]
+
+if __name__ == "__main__":
+    num_cores = multiprocessing.cpu_count()
+    errors = Parallel(n_jobs=num_cores)(delayed(calculate_MSE(time, length, directory)) 
+                                                        for time, length, directory in product(times, lengths, dirs))
+
+    error_df = pd.DataFrame(errors, columns=['time', 'length', 'error', 'error_cc'])
+    error_df.to_csv("hyperparameter_errors.csv")
+
+
+
+
+
+

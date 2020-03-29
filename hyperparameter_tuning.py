@@ -245,7 +245,7 @@ def MLE_continuity_constraint(neurons, spikes, average_speed, x, x_last, K, V, d
     return max_x
 
 def MSE(df, time_bucket_length):
-    msk = int(len(df) * .3333)
+    msk = int(len(df) * .6666)
     train = df.iloc[:msk]
     test = df.iloc[msk:]
     error = 0
@@ -263,7 +263,7 @@ def MSE(df, time_bucket_length):
 
 def MSE_continuity_constraint(df, time_bucket_length, K=15, V=20, d=0.5, train_msk=None):
     if not train_msk:
-        msk = int(len(df) * .3333)
+        msk = int(len(df) * .6666)
     train = df.iloc[:msk]
     test = df.iloc[msk:]
     error = 0

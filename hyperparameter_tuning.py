@@ -244,46 +244,60 @@ def MLE_continuity_constraint(neurons, spikes, average_speed, x, x_last, K, V, d
             max_val = sum_val
     return max_x
 
-def MSE(df, time_bucket_length):
-    msk = int(len(df) * .6666)
-    train = df.iloc[:msk]
-    test = df.iloc[msk:]
+def MSE(df, time_bucket_length, predict=True):
+    train, val, test = np.split(df.sample(frac=1), [int(.6*len(df)), int(.8*len(df))])
     error = 0
     locations = list(set(df.location))
     poisson = calculate_poisson(train, locations, time_bucket_length)
     neurons = list(df.columns[:-2])
-    predictions = []
-    for index, row in df.iterrows():
+    if predict:
+        predictions = []
+        for index, row in df.iterrows():
+            x_pred = MLE_p(neurons, row[:-2], locations, time_bucket_length, poisson)
+            predictions.append((index, x_pred))
+            if len(predictions) >= len(train) and len(predictions) <= len(train) + len(val):
+                error += (row.iloc[-1] - x_pred) ** 2
+        error /= len(val)
+        return error, predictions
+    for index, row in val.iterrows():
         x_pred = MLE_p(neurons, row[:-2], locations, time_bucket_length, poisson)
-        predictions.append((index, x_pred))
-        if len(predictions) > msk:
-            error += (row.iloc[-1] - x_pred) ** 2
-    error /= len(test)
-    return error, predictions
+        error += (row.iloc[-1] - x_pred) ** 2
+    error /= len(val)
+    return error
 
-def MSE_continuity_constraint(df, time_bucket_length, K=15, V=20, d=0.5, train_msk=None):
-    if not train_msk:
-        msk = int(len(df) * .6666)
-    train = df.iloc[:msk]
-    test = df.iloc[msk:]
+def MSE_continuity_constraint(df, time_bucket_length, K=15, V=20, d=0.5, predict=True):
+    train, val, test = np.split(df.sample(frac=1), [int(.6*len(df)), int(.8*len(df))])
     error = 0
     locations = list(set(df.location))
     average_speed = get_average_speeds(train, locations)
     poisson = calculate_poisson(train, locations, time_bucket_length)
     neurons = list(df.columns[:-2])
-    predictions = []
-    for index, row in df.iterrows():
+    if predict:
+        predictions = []
+        for index, row in df.iterrows():
+            x_pred = 0
+            if len(predictions) == 0:
+                x_pred = MLE_p(neurons, row[:-2], locations, time_bucket_length, poisson)
+            else:
+                x_pred = MLE_continuity_constraint(neurons, row[:-2], average_speed,
+                                               locations, predictions[-1][1], K, V, d, time_bucket_length, poisson)
+            predictions.append((index, x_pred))
+            if len(predictions) >= len(train) and len(predictions) <= len(train) + len(val):
+                error += (row.iloc[-1] - x_pred) ** 2
+        error /= len(val)
+        return error, predictions
+    pred_count = 0
+    for index, row in val.iterrows():
         x_pred = 0
-        if len(predictions) == 0:
+        if pred_count == 0:
             x_pred = MLE_p(neurons, row[:-2], locations, time_bucket_length, poisson)
         else:
             x_pred = MLE_continuity_constraint(neurons, row[:-2], average_speed,
                                            locations, predictions[-1][1], K, V, d, time_bucket_length, poisson)
-        predictions.append((index, x_pred))
-        if len(predictions) > msk:
-            error += (row.iloc[-1] - x_pred) ** 2
-    error /= len(test)
-    return error, predictions
+        error += (row.iloc[-1] - x_pred) ** 2
+        pred_count += 1
+    error /= len(val)
+    return error
 
 global bucketed
 bucketed = {}
@@ -305,8 +319,8 @@ def calculate_MSE(time, length, directory):
         bucketed[time, length, directory] = bucketed_spikes
 
     df = bucketed[time, length, directory]
-    error, _ = MSE(df, time)
-    error_cc, _ = MSE_continuity_constraint(df, time)
+    error, _ = MSE(df, time, predict=False)
+    error_cc, _ = MSE_continuity_constraint(df, time, predict=False)
     print("Time = {}s, length = {}cm, error = {:.2f}, error_cc = {:.2f}".format(time, length, error, error_cc))
     return [time, length, error, error_cc]
 

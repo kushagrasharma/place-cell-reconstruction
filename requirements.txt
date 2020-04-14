@@ -1,0 +1,6 @@
+numpy
+line_profiler
+matplotlib
+joblib
+pandas
+scipy

@@ -19,7 +19,7 @@ def diffusion_pf(spikes, params):
     w = np.full((t, P), 1/P)
 
     if "initial_condition" in params:
-        x[0,0] = params["initial_condition"]
+        x[0,:] = params["initial_condition"]
     
     def boundary(x_t):
         if x_t < 0:
@@ -68,7 +68,7 @@ def random_walk_pf(spikes, params):
     w = np.full((t, P), 1/P)
 
     if "initial_condition" in params:
-        x[0,0] = params["initial_condition"]
+        x[0,0,:] = params["initial_condition"]
     
     def boundary(x_t):
         if x_t[0] <= 0:
